@@ -6,6 +6,7 @@ from mcp.server import MCPServer
 
 CHROMA_DIR = Path.home() / "Documents" / "week-4" / "chroma_db"
 SECRETS = Path.home() / "Documents" / "week-4" / ".streamlit" / "secrets.toml"
+DISTANCE_THRESHOLD = 1.4
 
 with open(SECRETS, "rb") as f:
     secrets = tomllib.load(f)
@@ -30,8 +31,8 @@ def index_stats() -> str:
         return str(e)
 
 @mcp.tool()
-def search_my_docs(question: str) -> str:
-    """Search Vinita's RBI credit and debit card rulebook and return the matching passages with their page numbers. Use this for ANY question about credit or debit card rules, limits, fees, or charges."""
+def search_my_docs(question: str, top_n: int = 3) -> str:
+    """Search Vinita's RBI credit and debit card rulebook and return the matching passages with their page numbers. Use this for ANY question about credit or debit card rules, limits, fees, or charges. Adjust top_n to control how many passages to return (default: 3)."""
     try:
         response = openai_client.embeddings.create(model="text-embedding-3-small", input=question)
         vector = response.data[0].embedding
@@ -39,10 +40,14 @@ def search_my_docs(question: str) -> str:
         chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         collection = chroma_client.get_collection(name="docs")
 
-        results = collection.query(query_embeddings=[vector], n_results=3)
+        results = collection.query(query_embeddings=[vector], n_results=top_n)
+
+        distances = results["distances"][0]
+        if distances[0] > DISTANCE_THRESHOLD:
+            return "I could not find that in your document."
 
         output = []
-        for i, (doc, metadata, distance) in enumerate(zip(results["documents"][0], results["metadatas"][0], results["distances"][0])):
+        for i, (doc, metadata, distance) in enumerate(zip(results["documents"][0], results["metadatas"][0], distances)):
             page_num = metadata.get("page", "unknown")
             dist_rounded = round(distance, 2)
             passage = doc[:400]
@@ -76,6 +81,26 @@ def list_my_topics() -> str:
 
         topics = response.choices[0].message.content.strip()
         return f"Main topics in the RBI rulebook: {topics}"
+    except Exception as e:
+        return str(e)
+
+@mcp.tool()
+def list_documents() -> str:
+    """List all PDF and document files in Vinita's Documents folder. Use this to see what documents are available before searching."""
+    try:
+        docs_path = Path.home() / "Documents"
+        pdf_files = sorted(docs_path.rglob("*.pdf"))
+
+        if not pdf_files:
+            return "No PDF files found in ~/Documents"
+
+        file_list = []
+        for pdf in pdf_files:
+            size_mb = pdf.stat().st_size / (1024 * 1024)
+            relative_path = pdf.relative_to(docs_path)
+            file_list.append(f"- {relative_path} ({size_mb:.1f} MB)")
+
+        return "Available documents:\n" + "\n".join(file_list)
     except Exception as e:
         return str(e)
 
